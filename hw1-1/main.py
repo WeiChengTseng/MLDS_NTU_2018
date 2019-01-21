@@ -1,6 +1,10 @@
 import tensorflow as tf
 import numpy as np
 import matplotlib.pyplot as plt
+try:
+    plt.style.use('gadfly')
+except:
+    pass
 
 
 class ShallowNet():
@@ -44,7 +48,7 @@ class DeepNet():
         self._train_step = self._opt.minimize(self._loss)
         return
     
-    def train(self, x, y, batch_size=100, epoch=100):
+    def train(self, x, y, batch_size=100, epoch=1000):
         bs = batch_size
         his = []
         with tf.Session() as sess:
@@ -56,6 +60,7 @@ class DeepNet():
         return his
 
 if __name__ == '__main__':
+    plt.rcParams["figure.figsize"] = (12,6.75)
     x_sinc, y_sinc = np.linspace(-5, 5, 100), np.sinc(np.linspace(-5, 5, 100))*10
     x_sinc, y_sinc = x_sinc[:, np.newaxis], y_sinc[:, np.newaxis]
     net1 = ShallowNet(out_dim=1)
@@ -69,7 +74,14 @@ if __name__ == '__main__':
     y_mnist[np.arange(60000), y_] = 1
     print(x_mnist.shape)
     net1 = ShallowNet(in_dim=28*28, out_dim=10, model_type='classification')
-    net1.train(x_mnist, y_mnist)
+    his1 = net1.train(x_mnist, y_mnist)
     net2 = DeepNet(in_dim=28*28, out_dim=10, model_type='classification')
-    net2.train(x_mnist, y_mnist)
-    
+    his2 = net2.train(x_mnist, y_mnist)
+    plt.plot(np.arange(len(his1)), his1, label='shallow')
+    plt.plot(np.arange(len(his2)), his2, label='deep')
+    plt.legend()
+    plt.xlabel('epoch')
+    plt.ylabel('loss')
+    plt.title('model of mnist with different layers')
+    plt.yscale('log')
+    plt.savefig('hw1-1/mnist.png', dpi=600)
