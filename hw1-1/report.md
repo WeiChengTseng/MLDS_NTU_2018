@@ -1,0 +1,14 @@
+- Simulate a Function:
+    - Describe the models you use, including the number of parameters (at least two models) and the function you use. (0.5%)
+    - In one chart, plot the training loss of all models. (0.5%)
+    - In one graph, plot the predicted function curve of all models and the ground-truth function curve. (0.5%)
+    - Comment on your results. (1%)
+    - Use more than two models in all previous questions. (bonus 0.25%)
+    - Use more than one function. (bonus 0.25%)
+- Train on Actual Tasks:
+    - Describe the models you use and the task you chose. (0.5%)
+    - In one chart, plot the training loss of all models. (0.5%)
+    - In one chart, plot the training accuracy. (0.5%)
+    - Comment on your results. (1%)
+    - Use more than two models in all previous questions. (bonus 0.25%)
+    - Train on more than one task. (bonus 0.25%)
