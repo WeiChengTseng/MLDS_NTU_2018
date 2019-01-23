@@ -19,7 +19,7 @@ class ShallowNet():
     def __init__(self, in_dim=1, out_dim=1, model_type='regression'):
         self.x = tf.placeholder(dtype=tf.float32, shape=[None, in_dim])
         self.y = tf.placeholder(dtype=tf.float32, shape=[None, out_dim])
-        self._hidden_layer = tf.layers.dense(inputs=self.x, units=125, activation=tf.nn.relu)
+        self._hidden_layer = tf.layers.dense(inputs=self.x, units=190, activation=tf.nn.relu)
         self._out_layer = tf.layers.dense(inputs=self._hidden_layer, units=out_dim)
         if model_type=='regression':
             self._loss = tf.losses.mean_squared_error(self._out_layer, self.y)
@@ -29,7 +29,7 @@ class ShallowNet():
         self._train_step = self._opt.minimize(self._loss)
         return
 
-    def train(self, x, y, batch_size=5000, epoch=2000):
+    def train(self, x, y, batch_size=5000, epoch=20000):
         bs = batch_size if batch_size < len(x) else 50
         num_batch = len(x) // bs
         his = []
@@ -49,9 +49,11 @@ class DeepNet():
     def __init__(self, in_dim=1, out_dim=1, model_type='regression'):
         self.x = tf.placeholder(dtype=tf.float32, shape=[None, in_dim])
         self.y = tf.placeholder(dtype=tf.float32, shape=[None, out_dim])
-        self._hidden_layer = tf.layers.dense(self.x, 110, activation=tf.nn.relu)
-        self._hidden_layer2 = tf.layers.dense(self._hidden_layer, 110, activation=tf.nn.relu)
-        self._out_layer = tf.layers.dense(self._hidden_layer2, out_dim)
+        self._hidden_layer = tf.layers.dense(self.x, 10, activation=tf.nn.relu)
+        self._hidden_layer2 = tf.layers.dense(self._hidden_layer, 18, activation=tf.nn.relu)
+        self._hidden_layer3 = tf.layers.dense(self._hidden_layer2, 15, activation=tf.nn.relu)
+        self._hidden_layer4 = tf.layers.dense(self._hidden_layer3, 4, activation=tf.nn.relu)
+        self._out_layer = tf.layers.dense(self._hidden_layer4, out_dim)
         if model_type=='regression':
             self._loss = tf.losses.mean_squared_error(self._out_layer, self.y)
         else:
@@ -60,10 +62,10 @@ class DeepNet():
         self._train_step = self._opt.minimize(self._loss)
         return
     
-    def train(self, x, y, batch_size=5000, epoch=2000):
+    def train(self, x, y, batch_size=5000, epoch=20000):
         bs = batch_size if batch_size < len(x) else 50
         num_batch = len(x) // bs
-        his = []
+        x_copy, y_copy, his = np.copy(x), np.copy(y), []
         with tf.Session() as sess:
             sess.run(tf.global_variables_initializer())
             for i in tqdm.tqdm(range(epoch)):
@@ -73,7 +75,7 @@ class DeepNet():
                 his.append(sess.run(self._loss, feed_dict=fd))
                 choice = np.random.choice(len(x), len(x), replace=False)
                 x, y = x[choice], y[choice]
-            pred = sess.run(self._out_layer, feed_dict={self.x: x, self.y: y})
+            pred = sess.run(self._out_layer, feed_dict={self.x: x_copy, self.y: y_copy})
         return his, pred
 
 def plot(his1, his2, name='mnist', limit=10):
@@ -81,7 +83,6 @@ def plot(his1, his2, name='mnist', limit=10):
     plt.plot(np.arange(len(his1)), his1, label='shallow', alpha=0.7)
     plt.plot(np.arange(len(his2)), his2, label='deep', alpha=0.7)
     plt.legend()
-    # plt.ylim([0, limit])
     plt.xlim(left=10)
     plt.yscale('log')
     plt.xlabel('epoch')
@@ -93,13 +94,14 @@ def plot(his1, his2, name='mnist', limit=10):
     return
 
 def simulate(pred1, pred2):
-    x_sinc_ = np.linspace(-10, 10, 500) * 5 * 3.1415926
-    y_sinc_ = np.sinc(x_sinc_)
-    x_ = np.linspace(-10, 10, 500) * 5 * 3.1415926
-    plt.plot(x_, pred1, label='shallow')
-    plt.plot(x_, pred2, label='deep')
-    plt.plot(x_sinc_, y_sinc_, label='sinc(5x*pi)')
+    x_sinc_ = np.linspace(-1, 1, 400)
+    y_sinc_ = np.sinc(x_sinc_ * 5)
+    x_ = x_sinc_
+    plt.plot(x_, pred1, label='shallow', alpha=0.5)
+    plt.plot(x_, pred2, label='deep', alpha=0.5)
+    plt.plot(x_sinc_, y_sinc_, label='sinc(5x*pi)', alpha=0.5)
     plt.legend()
+    plt.xlim(-1, 1)
     plt.xlabel('x')
     plt.ylabel('sinc(5x*pi)')
     plt.savefig('hw1-1/{}.png'.format('result'), dpi=600)
@@ -108,24 +110,13 @@ def simulate(pred1, pred2):
 
 if __name__ == '__main__':
     plt.rcParams["figure.figsize"] = (12,6.75)
-    # x_sinc = np.linspace(-10, 10, 500) * 5 * 3.1415926
-    # y_sinc = np.sinc(x_sinc)
-    # x_sinc, y_sinc = x_sinc[:, np.newaxis], y_sinc[:, np.newaxis]
-    # net1 = ShallowNet(out_dim=1)
-    # his1, pred1 = net1.train(x_sinc, y_sinc)
-    # net2 = DeepNet(out_dim=1)
-    # his2, pred2 = net2.train(x_sinc, y_sinc)
-    # # print(pred1)
-    # plot(his1, his2, 'sinc(5x*pi)', limit=20)
-    # simulate(pred1, pred2)
-    # del (net1, net2)
-    
-    # 125, (110, 110)
-    (x_mnist, y_), (_, __) = tf.keras.datasets.mnist.load_data()
-    x_mnist, y_mnist = x_mnist.reshape([x_mnist.shape[0], -1]), np.zeros((len(x_mnist), 10))
-    y_mnist[np.arange(60000), y_] = 1
-    net1 = ShallowNet(in_dim=28*28, out_dim=10, model_type='classification')
-    his1, _ = net1.train(x_mnist, y_mnist, epoch=1000)
-    net2 = DeepNet(in_dim=28*28, out_dim=10, model_type='classification')
-    his2, _ = net2.train(x_mnist, y_mnist, epoch=1000)
-    plot(his1, his2, limit=10 ** 0)
+    x_sinc = np.linspace(-1, 1, 400)
+    y_sinc = np.sinc(x_sinc * 5)
+    x_sinc, y_sinc = x_sinc[:, np.newaxis], y_sinc[:, np.newaxis]
+    net1 = ShallowNet(out_dim=1)
+    his1, pred1 = net1.train(x_sinc, y_sinc)
+    net2 = DeepNet(out_dim=1)
+    his2, pred2 = net2.train(x_sinc, y_sinc)
+    plot(his1, his2, 'sinc(5x*pi)', limit=20)
+    simulate(pred1, pred2)
+    del (net1, net2)
