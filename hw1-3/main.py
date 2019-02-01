@@ -126,3 +126,4 @@ if __name__ == '__main__':
         net2 = DeepNet(in_dim=28*28, out_dim=10, hidden_neuron=i, model_type='classification')
         his2, _, num_para = net2.train(x_mnist, y_mnist, epoch=2000)
         para.append(num_para)
+        del net2
