@@ -19,8 +19,21 @@ class Net():
 
     def _build_net(self):
         self._x = tf.placeholder(tf.float32, shape=[None, None])
-        self._lstm = tf.nn.rnn_cell.LSTMCell(1)
+        self._lstm = tf.nn.rnn_cell.LSTMCell(num_units=4096)
         return
+    
+    def _save_result(self):
+
+        return
+        
+    def train(self):
+
+        return
+    
+    def eval(self):
+
+        return
+
 
 if __name__ == '__main__':
     TRAIN_PATH = './hw2-1/MLDS_hw2_1_data/training_data/feat/*.npy'
