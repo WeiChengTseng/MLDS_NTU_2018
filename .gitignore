@@ -2,3 +2,4 @@
 *.tar.gz
 MLDS_hw2_1_data/
 .vscode/
+S2VT-seq2seq-video-captioning-attention/

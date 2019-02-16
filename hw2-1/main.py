@@ -8,6 +8,10 @@ import matplotlib.pyplot as plt
 import numpy as np
 import pdb
 
+n_feat = 4096
+n_frame = 80
+n_neuron = 512
+
 class Net():
     def __init__(self, data):
         self._logger = logging.getLogger('Net')
@@ -61,7 +65,7 @@ class Net():
         return np.array(x), np.array(y)
 
     def _build_net(self):
-        self._x = tf.placeholder(tf.float32, shape=[None, None, None])
+        self._x = tf.placeholder(tf.float32, shape=[None, n_frame, n_feat])
         self._y = tf.placeholder(tf.float32, shape=[None, None])
         target_seq_len = tf.placeholder(tf.int32, [None], name='target_seq_len')
         max_target_len = tf.reduce_max(target_seq_len)  
@@ -99,7 +103,8 @@ class Net():
         self._logger.info('training')
 
         with tf.Session() as sess:
-            pass
+            choice = np.random.choice(len(self._x_train), len(self._x_train))
+            self._x_train, self._y_train = self._x_train[choice], self._y_train[choice]
 
         return
     
