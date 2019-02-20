@@ -183,11 +183,49 @@ class Net():
         saver = tf.train.Saver()
         return logits, loss, summary, train_op, saver
 
+    def _compute_bleu(self, mode='train', out_file='./hw2-1/output/output.txt'):
+        result, bleu = {}, []
+        with open(out_file,'r') as f:
+            for line in f:
+                line = line.rstrip()
+                comma = line.index(',')
+                test_id = line[:comma]
+                caption = line[comma+1:]
+                result[test_id] = caption
+
+        cap_label = self._train_cap if mode == 'train' else self._test_cap
+        for item in cap_label:
+            score_per_video = []
+            captions = [x.rstrip('.') for x in item['caption']]
+            score_per_video.append(BLEU(result[item['id']],captions,True))
+            bleu.append(score_per_video[0])
+        average = sum(bleu) / len(bleu)
+        self._logger.info("Average bleu score = " + str(average))
+        return average
+
+    def _tensorflow_log(self, sess, writer, bs, step):
+        fd = {self._x: self._train_data['x'][ :bs],
+            self._y: self._train_data['y'][ :bs],
+            self._cap_len: self._train_data['cap_len'][ :bs],
+            self._sampling: None}
+        summ_train = sess.run(self.summary, feed_dict=fd)
+        writer['train'].add_summary(summ_test, step)  
+
+        fd = {self._x: self._test_data['x'][ :bs],
+                self._y: self._test_data['y'][: bs],
+                self._cap_len: self._test_data['cap_len'][: bs],
+                self._bleu: self._compute_bleu(mode='test'),
+                self._sampling: None }
+        summ_test = sess.run(self.summary, feed_dict=fd)
+        writer['test'].add_summary(summ_test, step)
+        return
+
     def train(self, bs, lr=1e-4, epoch=100, save_path='./hw2-1/ckpt/'):
         self._logger.info('training start')
         with tf.Session() as sess:
             train_writer = tf.summary.FileWriter('./hw2-1/logs/train/', sess.graph)
             test_writer = tf.summary.FileWriter('./hw2-1/logs/test/')
+            writer = {'train': train_writer, 'test': test_writer}
             for i in range(epoch):
                 self._shuffle_data()
                 for j in range(self._n_train // bs):
@@ -196,6 +234,14 @@ class Net():
                         self._cap_len: self._train_data['cap_len'][j*bs: (j+1)*bs],
                         self._sampling: None, self._lr: lr}
                     sess.run(self.train_op, feed_dict=fd)
+
+                fd = {self._x: self._test_data['x'][ :bs],
+                        self._y: self._test_data['y'][: bs],
+                        self._cap_len: self._test_data['cap_len'][: bs],
+                        self._bleu: self._compute_bleu(mode='test'),
+                        self._sampling: None }
+                summ_test = sess.run(self.summary, feed_dict=fd)
+                test_writer.add_summary(summ_test, i)
                 
                 if i % 10 == 0:
                     self.saver.save(sess, save_path + "model.ckpt")
