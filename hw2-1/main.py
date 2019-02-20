@@ -51,6 +51,7 @@ class Net():
         train_data = self._build_dataset(self._train_cap)
         test_data = self._build_dataset(self._test_cap)
         self._n_train = len(self._train_data['x'])
+        self._n_test = len(self._test_data['x'])
 
         self._logger.info('Dataset is ready!')
         return train_data, test_data
@@ -71,6 +72,11 @@ class Net():
         self._train_data['x'] = self._train_data['x'][choice]
         self._train_data['y'] = self._train_data['y'][choice]
         self._train_data['cap_len'] = self._train_data['cap_len'][choice]
+
+        choice = np.random.choice(self._n_test, self._n_test)
+        self._test_data['x'] = self._test_data['x'][choice]
+        self._test_data['y'] = self._test_data['y'][choice]
+        self._test_data['cap_len'] = self._test_data['cap_len'][choice]
         return
 
     def _build_net(self, bs=64):
@@ -108,6 +114,7 @@ class Net():
         state_1 = self._lstm_1.zero_state(bs, dtype=tf.float32)
         state_2 = self._lstm_2.zero_state(bs, dtype=tf.float32)
 
+        # encoding stage
         pad, h = tf.zeros([bs, n_neuron]), []
         with tf.name_scope('encode_stage'):
             for i in range(n_frame):
@@ -122,6 +129,7 @@ class Net():
         max_prob_index = None
         cross_ent_list = []
 
+        # decoding stage
         for i in range(max_cap_len):
             with tf.name_scope('decode_stage'):
                 output_1, state_1 = self._lstm_1(pad_in, state_1)
@@ -150,7 +158,7 @@ class Net():
                 cross_entropy = tf.nn.softmax_cross_entropy_with_logits(logits=logit_words, labels=one_hot_labels)
                 cross_ent_list.append(cross_entropy * cap_mask[:, i])
         
-
+        # compute loss
         cross_entropy_tensor = tf.stack(cross_ent_list, 1)
         loss_total = tf.reduce_sum(cross_entropy_tensor, axis=1)
         loss = tf.reduce_mean(loss_total / self._cap_len, axis=0)
@@ -159,6 +167,7 @@ class Net():
         logits_reshaped = tf.reshape(logits_stacked, (max_cap_len, bs, self._voc_num))
         logits = tf.transpose(logits_reshaped, [1, 0, 2])
         
+        # tensorflow summary
         summary_loss = tf.summary.scalar('training loss', loss)
         summary_bleu = tf.summary.scalar('BLEU score', self._bleu)
         summary = tf.summary.merge_all()
@@ -174,28 +183,11 @@ class Net():
         saver = tf.train.Saver()
         return logits, loss, summary, train_op, saver
 
-    def _encoder(self, x, bs=64):
-        self._lstm_1 = tf.nn.rnn_cell.LSTMCell(num_units=n_neuron)
-        state = self._lstm_1.zero_state(bs, dtype=tf.float32)
-        for i in range(n_frame):
-            output, state = self._lstm_1(self._x, state)
-
-        self._logger.info('Build encoder')
-        return state
-
-    def _decoder(self, y, en_state):
-        self._lstm_de = tf.nn.rnn_cell.LSTMCell(num_units=n_neuron)
-        output, final_state = tf.nn.static_rnn(self._lstm_de, y, en_state)
-        self._logger.info('Build decoder')
-        return
-    
-    def _save_result(self):
-
-        return
-
     def train(self, bs, lr=1e-4, epoch=100, save_path='./hw2-1/ckpt/'):
         self._logger.info('training start')
         with tf.Session() as sess:
+            train_writer = tf.summary.FileWriter('./hw2-1/logs/train/', sess.graph)
+            test_writer = tf.summary.FileWriter('./hw2-1/logs/test/')
             for i in range(epoch):
                 self._shuffle_data()
                 for j in range(self._n_train // bs):
