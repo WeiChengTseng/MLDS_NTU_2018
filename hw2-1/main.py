@@ -7,6 +7,7 @@ import tensorflow as tf
 import matplotlib.pyplot as plt
 import numpy as np
 import pdb
+from MLDS_hw2_1_data.bleu_eval import *
 
 n_feat = 4096
 n_frame = 80
@@ -22,9 +23,9 @@ class Net():
         ch.setFormatter(logging.Formatter('[%(asctime)s] [%(name)s] [%(levelname)s] %(message)s'))
         self._logger.addHandler(ch)
 
-        self._x_train, self._y_train, self._x_test, self._y_test = self._load_data(data)
-        pdb.set_trace()
-        self.logits, self.loss, self.summary, self.train_op = self._build_net()
+        self._train_data, self._test_data = self._load_data(data)
+        self.logits, self.loss, self.summary, self.train_op, self.saver = self._build_net()
+
         return
     
     def _load_data(self, data_path):
@@ -47,22 +48,30 @@ class Net():
         for i in self._test_cap:
             i['feature'] = np.load(data_path[2]+i['id']+'.npy')
 
-        x_train, y_train = self._build_dataset(self._train_cap)
-        x_test, y_test = self._build_dataset(self._test_cap)
+        train_data = self._build_dataset(self._train_cap)
+        test_data = self._build_dataset(self._test_cap)
+        self._n_train = len(self._train_data['x'])
 
         self._logger.info('Dataset is ready!')
-        return x_train, y_train, x_test, y_test
+        return train_data, test_data
 
-    def _build_dataset(self, cap):
+    def _build_dataset(self, inputs):
         add_unk = lambda x: x if x in self._voc else '<UNK>'
-        x, y =[], []
-        for i in cap:
+        x, y, cap_len =[], [], []
+        for i in inputs:
             for j in i['caption']:
                 sentance = ['<BOS>'] + list(map(add_unk, j.rstrip('.').lower().split())) + ['<EOS>']
+                cap_len.append(len(sentance))
                 y.append([self._voc_map[k] for k in sentance])
                 x.append(i['feature'])
-        # pdb.set_trace()
-        return np.array(x), np.array(y)
+        return {'x': np.array(x), 'y': np.array(y), 'cap_len':np.array(cap_len)}
+
+    def _shuffle_data(self):
+        choice = np.random.choice(self._n_train, self._n_train)
+        self._train_data['x'] = self._train_data['x'][choice]
+        self._train_data['y'] = self._train_data['y'][choice]
+        self._train_data['cap_len'] = self._train_data['cap_len'][choice]
+        return
 
     def _build_net(self, bs=64):
         # create placeholder for inputs
@@ -73,6 +82,7 @@ class Net():
             self._cap_len = tf.placeholder(tf.int32, [None], name='cap_len')
             self._lr = tf.placeholder(tf.float32)
         self._logger.info('placeholders are create.')
+        self._bleu = tf.placeholder(tf.float32)
 
         # create the variables for training
         with tf.name_scope('vars'):
@@ -149,7 +159,9 @@ class Net():
         logits_reshaped = tf.reshape(logits_stacked, (max_cap_len, bs, self._voc_num))
         logits = tf.transpose(logits_reshaped, [1, 0, 2])
         
-        summary = tf.summary.scalar('training loss', loss_ave)
+        summary_loss = tf.summary.scalar('training loss', loss)
+        summary_bleu = tf.summary.scalar('BLEU score', self._bleu)
+        summary = tf.summary.merge_all()
         self._logger.info('network are created.')
 
         # optimizer and gradient clipping
@@ -159,7 +171,8 @@ class Net():
             capped_gradients = [(tf.clip_by_value(grad, -1., 1.), var) for grad, var in gradients if grad is not None]
             train_op = optimizer.apply_gradients(capped_gradients)
         
-        return logits, loss, summary, train_op
+        saver = tf.train.Saver()
+        return logits, loss, summary, train_op, saver
 
     def _encoder(self, x, bs=64):
         self._lstm_1 = tf.nn.rnn_cell.LSTMCell(num_units=n_neuron)
@@ -180,17 +193,21 @@ class Net():
 
         return
 
-    def train(self, bs, lr=1e-4):
-        self._logger.info('training')
-
+    def train(self, bs, lr=1e-4, epoch=100, save_path='./hw2-1/ckpt/'):
+        self._logger.info('training start')
         with tf.Session() as sess:
-            choice = np.random.choice(len(self._x_train), len(self._x_train))
-            self._x_train, self._y_train = self._x_train[choice], self._y_train[choice]
-            for i in range(len(self._x_train) // bs):
-                fd = {self._x: self._x_train[i*bs: (i+1)*bs],
-                      self._y: self._y_train[i*bs: (i+1)*bs],
-                      self._sampling: None, self._cap_len: None, self._lr: lr}
-                pass
+            for i in range(epoch):
+                self._shuffle_data()
+                for j in range(self._n_train // bs):
+                    fd = {self._x: self._train_data['x'][j*bs: (j+1)*bs],
+                        self._y: self._train_data['y'][j*bs: (j+1)*bs],
+                        self._cap_len: self._train_data['cap_len'][j*bs: (j+1)*bs],
+                        self._sampling: None, self._lr: lr}
+                    sess.run(self.train_op, feed_dict=fd)
+                
+                if i % 10 == 0:
+                    self.saver.save(sess, save_path + "model.ckpt")
+
 
         return
 
