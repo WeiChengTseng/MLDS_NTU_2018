@@ -8,12 +8,19 @@ import matplotlib.pyplot as plt
 import numpy as np
 import pdb
 import pickle
+from keras.preprocessing.text import text_to_word_sequence
 from MLDS_hw2_1_data.bleu_eval import *
+
+try:
+    os.environ["CUDA_DEVICE_ORDER"]="PCI_BUS_ID"   # see issue #152
+    os.environ["CUDA_VISIBLE_DEVICES"]="3"
+except:
+    pass
 
 n_feat = 4096
 n_frame = 80
 n_neuron = 512
-max_cap_len = 50
+max_cap_len = 46
 
 class Net():
     def __init__(self, data):
@@ -45,7 +52,8 @@ class Net():
         for video in self._train_cap + self._test_cap:
             cap = video['caption'] + cap
         for i in range(len(cap)):
-            voc = cap[i].replace('.', '').lower().split() + voc
+            # voc = cap[i].replace('.', '').lower().split() + voc
+            voc = text_to_word_sequence(cap[i]) + voc
         self._voc = list(np.unique(voc))[32:-12] + ['<PAD>', '<BOS>', '<EOS>', '<UNK>']
         self._voc_map = {i: idx for idx, i in enumerate(self._voc)}
         self._voc_num = len(self._voc)
@@ -62,33 +70,38 @@ class Net():
         self._n_test = len(test_data['x'])
 
         self._logger.info('Dataset is built!')
-        # pickle.dump(train_data, open('./hw2-1/train_data.p', 'wb'))
-        # pickle.dump(test_data, open('./hw2-1/test_data.p', 'wb'))
-        # self._logger.info('Dataset is saved.')
+        pdb.set_trace()
         return train_data, test_data
 
-    def _build_dataset(self, inputs):
+    def _build_dataset(self, inputs, file_name=None, is_reload=False):
         add_unk = lambda x: x if x in self._voc else '<UNK>'
         x, y, cap_len =[], [], []
+        if is_reload:
+            for i in inputs:
+                for j in i['caption']:
+                    x.append(i['feature'])
+            with open(file_name, 'rb') as f:
+                y_cap = pickle.load(f)
+            return y_cap.update({'x': np.array(x)})
+            
         for i in inputs:
             for j in i['caption']:
-                sentance = ['<BOS>'] + list(map(add_unk, j.rstrip('.').lower().split())) + ['<EOS>']
+                # sentance = ['<BOS>'] + list(map(add_unk, j.rstrip('.').lower().split())) + ['<EOS>']
+                sentance = ['<BOS>'] + list(map(add_unk, text_to_word_sequence(j))) + ['<EOS>']
                 cap_len.append(len(sentance))
+                if len(sentance) < max_cap_len:
+                    sentance = sentance + ['<PAD>'] * (max_cap_len - len(sentance))
                 y.append([self._voc_map[k] for k in sentance])
                 x.append(i['feature'])
         # pdb.set_trace()
+        if file_name is not None:
+            with open(file_name, 'wb') as f:
+                pickle.dump({'y': np.array(y), 'cap_len':np.array(cap_len)}, f)
         return {'x': np.array(x), 'y': np.array(y), 'cap_len':np.array(cap_len)}
 
     def _shuffle_data(self):
-        choice = np.random.choice(self._n_train, self._n_train)
-        self._train_data['x'] = self._train_data['x'][choice]
-        self._train_data['y'] = self._train_data['y'][choice]
-        self._train_data['cap_len'] = self._train_data['cap_len'][choice]
-
-        choice = np.random.choice(self._n_test, self._n_test)
-        self._test_data['x'] = self._test_data['x'][choice]
-        self._test_data['y'] = self._test_data['y'][choice]
-        self._test_data['cap_len'] = self._test_data['cap_len'][choice]
+        self._perm_train = np.random.choice(self._n_train, self._n_train, replace=False)
+        self._perm_test = np.random.choice(self._n_test, self._n_test)
         return
 
     def _build_net(self, bs=64):
@@ -189,7 +202,8 @@ class Net():
         with tf.name_scope('optimizer'):
             optimizer = tf.train.AdamOptimizer(self._lr)
             gradients = optimizer.compute_gradients(loss)
-            capped_gradients = [(tf.clip_by_value(grad, -1., 1.), var) for grad, var in gradients if grad is not None]
+            with tf.name_scope('gradient_clip'):
+                capped_gradients = [(tf.clip_by_value(grad, -1., 1.), var) for grad, var in gradients if grad is not None]
             train_op = optimizer.apply_gradients(capped_gradients)
         
         saver = tf.train.Saver()
@@ -216,39 +230,41 @@ class Net():
         return average
 
     def _tensorflow_log(self, sess, writer, bs, step):
-        fd = {self._x: self._train_data['x'][ :bs],
-            self._y: self._train_data['y'][ :bs],
-            self._cap_len: self._train_data['cap_len'][ :bs],}
+        fd = {self._x: self._train_data['x'][self._perm_train[ :bs]],
+              self._y: self._train_data['y'][self._perm_train[ :bs]],
+              self._cap_len: self._train_data['cap_len'][self._perm_train[ :bs]],
+              self._bleu: self._compute_bleu()}
             # self._sampling: None}
         summ_train = sess.run(self.summary, feed_dict=fd)
         writer['train'].add_summary(summ_train, step)  
 
-        fd = {self._x: self._test_data['x'][ :bs],
-                self._y: self._test_data['y'][: bs],
-                self._cap_len: self._test_data['cap_len'][: bs],
-                self._bleu: self._compute_bleu(mode='test'),}
-                # self._sampling: None }
+        fd = {self._x: self._test_data['x'][self._perm_test[ :bs]],
+              self._y: self._test_data['y'][self._perm_test[: bs]],
+              self._cap_len: self._test_data['cap_len'][self._perm_test[: bs]],
+              self._bleu: self._compute_bleu(mode='test'),}
+              # self._sampling: None }
         summ_test = sess.run(self.summary, feed_dict=fd)
         writer['test'].add_summary(summ_test, step)
         return
 
     def train(self, bs=64, lr=1e-4, epoch=100, save_path='./hw2-1/ckpt/'):
         self._logger.info('training start')
+        writer = {'train': tf.summary.FileWriter('./hw2-1/logs/train/'), 
+                  'test': tf.summary.FileWriter('./hw2-1/logs/test/')}
 
+        init = tf.global_variables_initializer()
         with tf.Session() as sess:
-            train_writer = tf.summary.FileWriter('./hw2-1/logs/train/', sess.graph)
-            test_writer = tf.summary.FileWriter('./hw2-1/logs/test/')
-            writer = {'train': train_writer, 'test': test_writer}
+            sess.run(init)
+            writer['train'].add_graph(sess.graph)
             self._logger.info('writer is created.')
-            # return
             for i in range(epoch):
                 self._shuffle_data()
                 for j in range(self._n_train // bs):
-                    fd = {self._x: self._train_data['x'][j*bs: (j+1)*bs],
-                        self._y: self._train_data['y'][j*bs: (j+1)*bs],
-                        self._cap_len: self._train_data['cap_len'][j*bs: (j+1)*bs],
-                        # self._sampling: None, 
-                        self._lr: lr}
+                    fd = {self._x: self._train_data['x'][self._perm_train[j*bs: (j+1)*bs]],
+                          self._y: self._train_data['y'][self._perm_train[j*bs: (j+1)*bs]],
+                          self._cap_len: self._train_data['cap_len'][self._perm_train[j*bs: (j+1)*bs]],
+                          # self._sampling: None, 
+                          self._lr: lr}
                     sess.run(self.train_op, feed_dict=fd)
 
                 self._tensorflow_log(sess, writer, bs, i)
