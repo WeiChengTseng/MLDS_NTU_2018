@@ -9,6 +9,7 @@ import numpy as np
 import pdb
 import pickle
 import tqdm
+import math
 from keras.preprocessing.text import text_to_word_sequence
 from MLDS_hw2_1_data.bleu_eval import *
 
@@ -46,13 +47,7 @@ class Net():
             ids.append(i['id'])
         return np.array(x), np.array(ids), len(ids)
     
-    def _load_data(self, data_path, is_reload=False):
-        if is_reload:
-            train_data = pickle.load(open('./hw2-1/train_data.p', 'rb'))
-            test_data = pickle.load(open('./hw2-1/test_data.p', 'rb'))
-            self._logger.info('Dataset is reloaded.')
-            return train_data, test_data
-
+    def _load_data(self, data_path):
         self._train_cap = json.load(open(data_path[1]))
         self._test_cap = json.load(open(data_path[3]))
 
@@ -106,6 +101,28 @@ class Net():
             with open(file_name, 'wb') as f:
                 pickle.dump({'y': np.array(y), 'cap_len':np.array(cap_len)}, f)
         return {'x': np.array(x), 'y': np.array(y), 'cap_len':np.array(cap_len)}
+
+    def _batch_data(self, j, lr=None, mode='train', bs=64):
+        if mode == 'train':
+            data = self._train_data
+            end = (j+1)*bs if j < self._n_train // bs else self._n_train
+            fd = {self._x: data['x'][self._perm_train[j*bs: end]],
+                  self._y: data['y'][self._perm_train[j*bs: end]],
+                  self._cap_len: data['cap_len'][self._perm_train[j*bs: end]],
+                  self._lr: lr if lr is not None else 0}
+        elif mode == 'test':
+            data = self._test_data
+            end = (j+1)*bs if j < self._n_test // bs else self._n_test
+            fd = {self._x: data['x'][self._perm_test[j*bs: end]],
+                  self._y: data['y'][self._perm_test[j*bs: end]],
+                  self._cap_len: data['cap_len'][self._perm_train[j*bs: end]]}
+        elif mode == 'eval':
+            end = (j+1)*bs if j < self._n_eval // bs else self._n_eval
+            fd = {self._x: self._eval_x[j*bs: end]}
+        else:
+            self._logger.error('invalid mode')
+            return
+        return fd
 
     def _shuffle_data(self):
         self._perm_train = np.random.choice(self._n_train, self._n_train, replace=False)
@@ -184,7 +201,7 @@ class Net():
                 logits_list.append(logit_words)
             
             labels = self._y[:, i]
-            one_hot_labels = tf.one_hot(labels, self._voc_num, on_value = 1, off_value = None, axis = 1) 
+            one_hot_labels = tf.one_hot(labels, self._voc_num, on_value=1, off_value=None, axis=1) 
             cross_entropy = tf.nn.softmax_cross_entropy_with_logits_v2(logits=logit_words, labels=one_hot_labels)
             cross_ent_list.append(cross_entropy * cap_mask[:, i])
         
@@ -224,9 +241,7 @@ class Net():
             for line in f:
                 line = line.rstrip()
                 comma = line.index(',')
-                test_id = line[:comma]
-                caption = line[comma+1:]
-                result[test_id] = caption
+                result[line[:comma]] = caption = line[comma+1:]
 
         cap_label = self._train_cap if mode == 'train' else self._test_cap
         for item in cap_label:
@@ -239,19 +254,11 @@ class Net():
         return average
 
     def _tensorflow_log(self, sess, writer, bs, step):
-        fd = {self._x: self._train_data['x'][self._perm_train[ :bs]],
-              self._y: self._train_data['y'][self._perm_train[ :bs]],
-              self._cap_len: self._train_data['cap_len'][self._perm_train[ :bs]],
-              self._bleu: self._compute_bleu()}
-            # self._sampling: None}
-        summ_train = sess.run(self.summary, feed_dict=fd)
-        writer['train'].add_summary(summ_train, step)  
+        # fd = self._batch_data(0, mode='train').update({self._bleu: self._compute_bleu()})
+        # summ_train = sess.run(self.summary, feed_dict=fd)
+        # writer['train'].add_summary(summ_train, step)  
 
-        fd = {self._x: self._test_data['x'][self._perm_test[ :bs]],
-              self._y: self._test_data['y'][self._perm_test[: bs]],
-              self._cap_len: self._test_data['cap_len'][self._perm_test[: bs]],
-              self._bleu: self._compute_bleu(mode='test'),}
-              # self._sampling: None }
+        fd = self._batch_data(0, mode='test').update({self._bleu: self._compute_bleu(mode='test')})
         summ_test = sess.run(self.summary, feed_dict=fd)
         writer['test'].add_summary(summ_test, step)
         return
@@ -263,18 +270,22 @@ class Net():
         init = tf.global_variables_initializer()
         with tf.Session() as sess:
             sess.run(init)
+            self._shuffle_data()
             writer['train'].add_graph(sess.graph)
             self._logger.info('training start')
             self.evaluate(sess)
+            self._tensorflow_log(sess, writer, bs, 0)
             return
+            n_batch = math.ceil(self._n_train / bs)
             for i in range(epoch):
                 self._shuffle_data()
-                for j in range(self._n_train // bs):
-                    fd = {self._x: self._train_data['x'][self._perm_train[j*bs: (j+1)*bs]],
-                          self._y: self._train_data['y'][self._perm_train[j*bs: (j+1)*bs]],
-                          self._cap_len: self._train_data['cap_len'][self._perm_train[j*bs: (j+1)*bs]],
-                          # self._sampling: None, 
-                          self._lr: lr}
+                for j in range(n_batch):
+                    # fd = {self._x: self._train_data['x'][self._perm_train[j*bs: (j+1)*bs]],
+                    #       self._y: self._train_data['y'][self._perm_train[j*bs: (j+1)*bs]],
+                    #       self._cap_len: self._train_data['cap_len'][self._perm_train[j*bs: (j+1)*bs]],
+                    #       # self._sampling: None, 
+                    #       self._lr: lr}
+                    fd = self._batch_data(j, lr, 'train')
                     sess.run(self.train_op, feed_dict=fd)
                 self.evaluate(sess)
                 self._tensorflow_log(sess, writer, bs, i)
@@ -290,11 +301,12 @@ class Net():
         return
     
     def evaluate(self, sess=None, bs=64, out_file='./hw2-1/output/output.txt'):
-        result = []
-        for k in range(self._n_eval // bs):
-            fd={self._x: self._eval_x[k*bs: (k+1)*bs]}
-            pdb.set_trace()
-            result = result + sess.run(self.pred, feed_dict=fd)
+        n_batch, result = math.ceil(self._n_eval / bs), []
+
+        for k in range(n_batch):
+            fd = self._batch_data(k, mode='eval')
+            result.append(sess.run(self.pred, feed_dict=fd))
+        result = np.concatenate(result)
         with open(out_file, 'w') as f:
             for idx, k in enumerate(result):
                 sent = list(map(lambda x: self._inv_voc_map[x], k))
