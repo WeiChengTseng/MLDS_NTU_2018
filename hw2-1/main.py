@@ -8,6 +8,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 import pdb
 import pickle
+import tqdm
 from keras.preprocessing.text import text_to_word_sequence
 from MLDS_hw2_1_data.bleu_eval import *
 
@@ -33,9 +34,17 @@ class Net():
 
         self._logger.info('Net __init__')
         self._train_data, self._test_data = self._load_data(data)
+        self._eval_x, self._eval_ids, self._n_eval = self._build_eval_set()
         self.logits, self.loss, self.summary, self.train_op, self.saver = self._build_net()
-
+        self.pred = tf.argmax(self.logits, axis=2, name='pred')
         return
+
+    def _build_eval_set(self):
+        x, ids = [], []
+        for i in self._test_cap:
+            x.append(i['feature'])
+            ids.append(i['id'])
+        return np.array(x), np.array(ids), len(ids)
     
     def _load_data(self, data_path, is_reload=False):
         if is_reload:
@@ -52,10 +61,10 @@ class Net():
         for video in self._train_cap + self._test_cap:
             cap = video['caption'] + cap
         for i in range(len(cap)):
-            # voc = cap[i].replace('.', '').lower().split() + voc
             voc = text_to_word_sequence(cap[i]) + voc
         self._voc = list(np.unique(voc))[32:-12] + ['<PAD>', '<BOS>', '<EOS>', '<UNK>']
         self._voc_map = {i: idx for idx, i in enumerate(self._voc)}
+        self._inv_voc_map = {idx: i for i, idx in self._voc_map.items()}
         self._voc_num = len(self._voc)
         
         # map the feature to the caption
@@ -70,7 +79,7 @@ class Net():
         self._n_test = len(test_data['x'])
 
         self._logger.info('Dataset is built!')
-        pdb.set_trace()
+        # pdb.set_trace()
         return train_data, test_data
 
     def _build_dataset(self, inputs, file_name=None, is_reload=False):
@@ -84,16 +93,15 @@ class Net():
                 y_cap = pickle.load(f)
             return y_cap.update({'x': np.array(x)})
             
-        for i in inputs:
+        for i in tqdm.tqdm(inputs[:100], desc='processing dataset'):
             for j in i['caption']:
-                # sentance = ['<BOS>'] + list(map(add_unk, j.rstrip('.').lower().split())) + ['<EOS>']
                 sentance = ['<BOS>'] + list(map(add_unk, text_to_word_sequence(j))) + ['<EOS>']
                 cap_len.append(len(sentance))
                 if len(sentance) < max_cap_len:
                     sentance = sentance + ['<PAD>'] * (max_cap_len - len(sentance))
                 y.append([self._voc_map[k] for k in sentance])
                 x.append(i['feature'])
-        # pdb.set_trace()
+
         if file_name is not None:
             with open(file_name, 'wb') as f:
                 pickle.dump({'y': np.array(y), 'cap_len':np.array(cap_len)}, f)
@@ -107,13 +115,15 @@ class Net():
     def _build_net(self, bs=64):
         # create placeholder for inputs
         with tf.name_scope('inputs'):
-            self._x = tf.placeholder(tf.float32, shape=[None, n_frame, n_feat])
-            self._y = tf.placeholder(tf.uint8, shape=[None, max_cap_len])
+            self._x = tf.placeholder(tf.float32, name='x', 
+                                     shape=[None, n_frame, n_feat])
+            self._y = tf.placeholder(tf.uint8, name='y', 
+                                     shape=[None, max_cap_len])
             # self._sampling = tf.placeholder(tf.bool, [max_cap_len], name='sampling') 
             self._cap_len = tf.placeholder(tf.int32, [None], name='cap_len')
-            self._lr = tf.placeholder(tf.float32)
+            self._lr = tf.placeholder(tf.float32, name='lr')
+            self._bleu = tf.placeholder(tf.float32, name='BLEU')
         self._logger.info('placeholders are create.')
-        self._bleu = tf.placeholder(tf.float32)
 
         # create the variables for training
         with tf.name_scope('vars'):
@@ -133,11 +143,12 @@ class Net():
             feat_reshape = tf.reshape(feat_proj, [-1, n_frame, n_neuron])
             feat = tf.transpose(feat_reshape, perm=[1, 0, 2])
 
-        self._lstm_1 = tf.nn.rnn_cell.LSTMCell(num_units=n_neuron)
-        self._lstm_2 = tf.nn.rnn_cell.LSTMCell(num_units=n_neuron)
-
-        state_1 = self._lstm_1.zero_state(bs, dtype=tf.float32)
-        state_2 = self._lstm_2.zero_state(bs, dtype=tf.float32)
+        bs = tf.shape(self._x)[0]
+        with tf.name_scope('lstm_cell'):
+            self._lstm_1 = tf.nn.rnn_cell.LSTMCell(num_units=n_neuron)
+            self._lstm_2 = tf.nn.rnn_cell.LSTMCell(num_units=n_neuron)
+            state_1 = self._lstm_1.zero_state(bs, dtype=tf.float32)
+            state_2 = self._lstm_2.zero_state(bs, dtype=tf.float32)
 
         # encoding stage
         pad, h = tf.zeros([bs, n_neuron]), []
@@ -149,10 +160,7 @@ class Net():
 
         bos = tf.ones([bs, n_neuron])
         pad_in = tf.zeros([bs, n_neuron])
-
-        logits = []
-        max_prob_index = None
-        cross_ent_list = []
+        logits_list, max_prob_index, cross_ent_list = [], None, []
 
         # decoding stage
         with tf.name_scope('decode_stage'):
@@ -172,14 +180,12 @@ class Net():
                     con = tf.concat([embed_result, output_1], axis=1)
                     output_2, state_2 = self._lstm_2(con, state_2)
 
-            # with tf.name_scope('output_fc'):
                 logit_words =  tf.nn.xw_plus_b(output_2, w_de, b_de)
-                logits.append(logit_words)
-
+                logits_list.append(logit_words)
             
             labels = self._y[:, i]
             one_hot_labels = tf.one_hot(labels, self._voc_num, on_value = 1, off_value = None, axis = 1) 
-            cross_entropy = tf.nn.softmax_cross_entropy_with_logits(logits=logit_words, labels=one_hot_labels)
+            cross_entropy = tf.nn.softmax_cross_entropy_with_logits_v2(logits=logit_words, labels=one_hot_labels)
             cross_ent_list.append(cross_entropy * cap_mask[:, i])
         
         # compute loss
@@ -188,26 +194,29 @@ class Net():
             loss_total = tf.reduce_sum(cross_entropy_tensor, axis=1)
             loss = tf.reduce_mean(loss_total / tf.cast(self._cap_len, tf.float32), axis=0)
 
-        logits_stacked = tf.stack(logits, axis = 0)
+        logits_stacked = tf.stack(logits_list, axis = 0)
         logits_reshaped = tf.reshape(logits_stacked, (max_cap_len, bs, self._voc_num))
         logits = tf.transpose(logits_reshaped, [1, 0, 2])
-        
+
         # tensorflow summary
         summary_loss = tf.summary.scalar('training loss', loss)
         summary_bleu = tf.summary.scalar('BLEU score', self._bleu)
         summary = tf.summary.merge_all()
         self._logger.info('network are created.')
 
-        # optimizer and gradient clipping
+        train_op = self._build_optimizer(self._lr, loss)
+        saver = tf.train.Saver()
+        return logits, loss, summary, train_op, saver
+
+    def _build_optimizer(self, lr, objective_fn):
         with tf.name_scope('optimizer'):
-            optimizer = tf.train.AdamOptimizer(self._lr)
-            gradients = optimizer.compute_gradients(loss)
+            optimizer = tf.train.AdamOptimizer(lr)
+            gradients = optimizer.compute_gradients(objective_fn)
             with tf.name_scope('gradient_clip'):
                 capped_gradients = [(tf.clip_by_value(grad, -1., 1.), var) for grad, var in gradients if grad is not None]
             train_op = optimizer.apply_gradients(capped_gradients)
-        
-        saver = tf.train.Saver()
-        return logits, loss, summary, train_op, saver
+        self._logger.info('optimizer is created.')
+        return train_op
 
     def _compute_bleu(self, mode='train', out_file='./hw2-1/output/output.txt'):
         result, bleu = {}, []
@@ -248,15 +257,16 @@ class Net():
         return
 
     def train(self, bs=64, lr=1e-4, epoch=100, save_path='./hw2-1/ckpt/'):
-        self._logger.info('training start')
         writer = {'train': tf.summary.FileWriter('./hw2-1/logs/train/'), 
                   'test': tf.summary.FileWriter('./hw2-1/logs/test/')}
-
+        self._logger.info('writer is created.')
         init = tf.global_variables_initializer()
         with tf.Session() as sess:
             sess.run(init)
             writer['train'].add_graph(sess.graph)
-            self._logger.info('writer is created.')
+            self._logger.info('training start')
+            self.evaluate(sess)
+            return
             for i in range(epoch):
                 self._shuffle_data()
                 for j in range(self._n_train // bs):
@@ -266,7 +276,7 @@ class Net():
                           # self._sampling: None, 
                           self._lr: lr}
                     sess.run(self.train_op, feed_dict=fd)
-
+                self.evaluate(sess)
                 self._tensorflow_log(sess, writer, bs, i)
                 
                 if i % 10 == 0:
@@ -279,8 +289,16 @@ class Net():
 
         return
     
-    def evaluate(self):
-
+    def evaluate(self, sess=None, bs=64, out_file='./hw2-1/output/output.txt'):
+        result = []
+        for k in range(self._n_eval // bs):
+            fd={self._x: self._eval_x[k*bs: (k+1)*bs]}
+            pdb.set_trace()
+            result = result + sess.run(self.pred, feed_dict=fd)
+        with open(out_file, 'w') as f:
+            for idx, k in enumerate(result):
+                sent = list(map(lambda x: self._inv_voc_map[x], k))
+                f.write(self._eval_ids[idx]+','+' '.join(sent)+'\n')
         return
 
 
